@@ -1,0 +1,442 @@
+---
+title: "Sentiment Analysis"
+author: "Gabriele"
+date: "27/5/2021"
+output: html_document
+---
+## this file is intended only as a guideline for the implementation details behind the project. Final and complete reasoning and details are in the pdf itself
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Sentiment Analysis
+##Twitter US Airline
+Given the Twitter 'US Airline Sentiment' Dataset provided on Kaggle we will try to build a machine learning tool to predict whether a given twitter is associated to a specific sentiment among:
+
+-  Positive
+
+-  Neutral
+
+-  Negative
+
+The project will be divided in several step. Starting from the raw data we will preprocess them with the de-facto standard techniques and them build a term-document frequency matrix to be used ad learning data.
+
+
+```{r}
+# load packages
+library(dplyr)
+library(quanteda)
+library(ggplot2)
+library(wordcloud)
+library(caret)
+library(Factoshiny)
+library(FactoMineR)
+library(factoextra)
+library(ca)
+library(irlba)
+```
+
+
+##Import the data
+```{r}
+set.seed(234)
+data.raw = read.csv("Tweets.csv", header=TRUE,
+                    stringsAsFactors = FALSE)
+
+# what does the dataset contain?
+data.raw %>% summary
+data.raw %>% names
+# n? p?
+data.raw %>% dim
+
+# for the purposes of the project we will consider
+# only the first 6000 tweets so that possible computation time will be
+# "bounded"
+limit.dataset.dim = sample(1:nrow(data.raw),
+                           size=6000,
+                           replace = FALSE)
+data.raw = data.raw[limit.dataset.dim,]
+```
+the data show many redundant information that are beyond the goal of this project, so we will discard them, here a list:
+
+- tweet_id
+
+- airline_sentiment_confidence
+
+- negativereason_confidence
+
+- airline_sentiment_gold
+
+- name
+
+- negativereason_gold
+
+- retweet_count
+
+- tweet_coord
+
+- tweet_created
+
+- user_timezone
+```{r}
+# delete predictors
+data.raw = data.raw[,-c(1,3,5,7,8,9,10,12,13,14,15)]
+data.raw %>% dim
+data.raw %>% names
+data.raw %>% str
+
+names(data.raw) = c("Sentiment", "Negative_Reason", "Airline", "Text")
+```
+Some categorical predictors are of type 'char' while we need them as 'factors', so we perform a cast:
+```{r}
+# our response variable
+data.raw$Sentiment = as.factor(data.raw$Sentiment)
+data.raw$Airline =  as.factor(data.raw$Airline)
+
+head(data.raw)
+str(data.raw)
+```
+#Satisfaction rate for Companies
+```{r}
+# Which and how many distint companies are mentioned?
+airline.names = unique(data.raw$Airline)
+#print(airline.names)
+#length(airline.names)
+# 6
+
+# Look at the sentiment for each company
+attach(data.raw)
+
+par(mfrow=c(2,3), cex=.7, cex.main=.9)
+for( i in airline.names){
+    barplot(
+        prop.table(table(Sentiment[Airline==i])),
+        col=4:6,
+        main=paste("Sentiment Distribution \n for",i),
+        axes=TRUE,
+        las=2
+    )
+}
+
+detach(data.raw)
+```
+For all the companies the predominant sentiment is 'negative'; well this could be explained by considering the fact that often, after a positive expirience, customers are not interested to share their experience as much as when they face issues/problems
+Anyway both 'Virgin America' and 'Delta' have a much better response.
+
+Now we will have a look at only the negative tweets and we will try to investigate the main cause by means of clustering
+```{r}
+# pick only the negative tweets
+causes.negative.tweets = data.raw[data.raw$Sentiment=="negative",]
+# pick the reason
+causes.negative.tweets = causes.negative.tweets$Negative_Reason %>% as.vector
+# how many reasons?
+causes.negative.tweets %>% length
+
+causes.negative.tweets[1:20]
+# any repeated reason?
+length(unique(causes.negative.tweets))
+
+# since the identified reasons for the negative rewiews are just 10 we simply consider them all and analize the frequencies
+
+causes.negative.tweets.unique = unique(causes.negative.tweets)
+causes.negative.tweets.unique
+
+
+# wordclouds
+wordcloud(words=causes.negative.tweets.unique,
+          freq=table(causes.negative.tweets),
+          max.words = length(causes.negative.tweets.unique),
+          colors=brewer.pal(8, "Dark2"), random.order=FALSE,
+          use.r.layout = F, scale=c(2,1))
+# distribution
+par(mar=c(11,4,2,4))
+barplot(
+        prop.table(table(as.factor(causes.negative.tweets))),
+        main="Main causes for negative tweets",
+        axes=TRUE,
+        col=10:(length(causes.negative.tweets)),
+        las=2,
+        cex.names = .8
+    )
+abline(h=0)
+
+```
+
+look the problem from a different perspective
+```{r}
+# add a column for the length of the tweets
+data.raw$TextLength = nchar(data.raw$Text)
+summary(data.raw$TextLength)
+
+# there are very short tweets to very long ones; is there any correlation
+# with the emerging sentiment??
+
+par(mfrow=c(2,2),cex=.8,main="Distribution
+     of TextLength for Sentiments")
+
+# by ggplot histogram
+ggplot(data.raw, aes(x = TextLength, fill = Sentiment)) +
+  theme_bw() +
+  geom_histogram(binwidth = 3) +
+  labs(y = "Text Count", x = "Length of Text",
+       title = "Distribution of Text Lengths with Sentiment Labels")
+
+# No evidence from the histogram, the text length seems 
+# to behave the same way indipendently on the caracterization of the tweet
+
+```
+Before we move on with a train/test split and the preprocessing step, we must notice that because of how tweetter's tag sistem works it is very common to have words that starts with "@" and are irrelevant because they are simply either the name or the company or the name of another user; for which we already decided to keep track in 'Airline' or simply discard
+```{r}
+data.raw$Text =  gsub("@([a-zA-Z0-9]|[_])*", "", data.raw$Text)
+```
+PREPROCESSING:
+1) TOKENIZATION
+2) LOWER CASING
+3) REMOVE STOPWORDS
+3) STEMMING
+4) MONOGRAM AND 2-GRAMS
+
+We will later consider both BOW and TFIDF metrics to represent the data
+```{r}
+# create 70/30 % split maintaining
+# the proportion of the classes
+
+
+indexes.split = createDataPartition(data.raw$Sentiment, times=1,
+                              p=0.7, list=F)
+
+# train set
+train.raw = data.raw[indexes.split,]
+#write.csv(train.raw,
+          #file="~/Scrivania/train_raw.csv",
+          #row.names = rownames(train.raw),
+          #col.names = names(train.raw))
+# test set
+test.raw = data.raw[-indexes.split,]
+#write.csv(test.raw,
+          #file="~/Scrivania/test_raw.csv",
+          #row.names = rownames(test.raw),
+          #col.names = names(test.raw))
+
+# check that proportions are correct
+prop.table(table(train.raw$Sentiment))
+prop.table(table(test.raw$Sentiment))
+
+# 1) TOKENIZATION
+train.tokens = tokens(train.raw$Text, what="word",
+                      remove_punct = TRUE, remove_symbols = TRUE,
+                      remove_numbers = TRUE, remove_separators = TRUE,
+                      split_hyphens = TRUE, remove_url = TRUE) 
+# 2) LOWER CASING
+train.tokens = tokens_tolower(train.tokens)
+
+# 3) REMOVE STOPWORDS
+train.tokens = tokens_select(train.tokens, stopwords("en"),
+                             selection = "remove")
+
+# 4) STEMMING
+train.tokens =tokens_wordstem(train.tokens, language = "english")
+
+
+# use quanteda class Document-term Frequency Matrix (DFM) 
+# document_term_frequency_matrix
+# built-in type in quanteda library
+train.tokens.dfm = dfm(train.tokens)
+# cast it to matrix
+train.tokens.matrix = as.matrix(train.tokens.dfm)
+dim(train.tokens.matrix)
+# train.tokens.matrix = train.tokens %>% dfm() %>% as.matrix()
+
+
+# let's see the effects of stemming
+#colnames(train.tokens.matrix)[1:50]
+
+# create a first dataframe with BOW representation of texts
+train.tokens.bow.df = cbind(Sentiment = train.raw$Sentiment,
+                            as.data.frame(train.tokens.matrix))
+
+# maybe some texts are now empty, check
+empty.docs = which(rowSums(train.tokens.matrix) == 0.0)
+if(length(empty.docs != 0)){
+  train.tokens.bow.df = train.tokens.bow.df[-empty.docs,]
+}
+
+# check that nrow has changed
+dim(train.tokens.bow.df)
+# update matrix
+train.tokens.matrix = as.matrix(train.tokens.bow.df[,-1])
+
+```
+
+#Exploratory Analysis
+```{r}
+text.marginal = colSums(train.tokens.matrix)
+text.marginal %>% length()
+text.marginal = text.marginal[text.marginal > 150]
+text.marginal %>% length()
+
+par(cex=.7)
+barplot(text.marginal,
+        las=2,
+        col = rainbow(length(text.marginal)),
+        ylab = "Word Count",
+        main = "Most common words")
+
+
+# extract the 30 most common words in positive tweets
+positive.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'positive', -1 ]
+positive.cols = which(colSums(positive.words) > 0)
+positive.words = positive.words[,positive.cols]
+positive.freq = colSums(positive.words)/ sum( colSums(positive.words))
+positive.words = names(positive.words)
+
+par(cex=.9)
+wordcloud(words=positive.words,
+          freq=positive.freq,
+          max.words = 100,
+          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
+          use.r.layout = F,
+          scale = c(5,0.3),
+          rot.per = 0.1
+          )
+
+
+# extract the 30 most common words in neutral tweets
+neutral.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'neutral', -1 ]
+neutral.cols = which(colSums(neutral.words) > 0)
+nautral.words = neutral.words[,neutral.cols]
+neutral.freq = colSums(neutral.words)/ sum( colSums(neutral.words))
+neutral.words = names(neutral.words)
+
+wordcloud(words=neutral.words,
+          freq=neutral.freq,
+          max.words = 100,
+          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
+          use.r.layout = F,
+          scale = c(5,0.3),
+          rot.per = 0.1
+          )
+
+# extract the 30 most common words in negative tweets
+negative.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'negative', -1 ]
+negative.cols = which(colSums(negative.words) > 0)
+negative.words = negative.words[,negative.cols]
+negative.freq = colSums(negative.words)/ sum( colSums(negative.words))
+negative.words = names(negative.words)
+
+wordcloud(words=negative.words,
+          freq=negative.freq,
+          max.words = 100,
+          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
+          use.r.layout = F,
+          scale = c(5,0.3),
+          rot.per = 0.1
+          )
+```
+
+#Clustering
+We will try to assess whether the data show any clustering tendency focusing on the BOW representation
+```{r}
+sl = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="single")
+cl = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="complete")
+centroid = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="centroid")
+```
+find the suggested number of clusters
+```{r}
+m = length(sl$height)
+sl$height[(m-10):m] %>% plot(main="single linkage",
+                             ylab="heigth",
+                             xlab="",
+                             type="b",
+                             xaxt='n')
+cl$height[(m-10):m] %>% plot(main="complete linkage",
+                             ylab="heigth",
+                             xlab="",
+                             type="b",
+                             xaxt='n')
+centroid$height[(m-10):m] %>% plot(main="centroid linkage",
+                             ylab="heigth",
+                             xlab="",
+                             type="b",
+                             xaxt='n')
+```
+
+
+
+#TF-IDF
+```{r}
+# any duplicates?
+which(duplicated(colnames(train.tokens.matrix))) 
+# no duplicates
+
+#tf-idf
+tf <- function(row) {row/sum(row)}
+
+idf = function(col){
+    corpus.size = length(col)
+    doc.count = length(which(col > 0))
+    
+    log10(corpus.size / doc.count)
+}
+
+tf.idf <- function(tf,idf) {tf*idf}
+
+train.tokens.tf <- apply(train.tokens.matrix, 1, tf)
+#View(train.tokens.tf[1:20,1:20])
+dim(train.tokens.tf)
+
+train.tokens.idf <- apply(train.tokens.matrix, 2, idf)
+#View(train.tokens.idf[1:20,1:20])
+dim(train.tokens.idf)
+
+
+train.tokens.tfidf <- apply(train.tokens.tf, 2, tf.idf, idf=train.tokens.idf)
+#View(train.tokens.tfidf[1:20,1:20])
+dim(train.tokens.tfidf)
+
+train.tokens.tfidf <- t(train.tokens.tfidf)  # transpose to doc*term matrix
+
+
+# any incomplete case?
+incomplete.cases = which(!complete.cases(train.tokens.tfidf))
+
+# fix the issue
+train.tokens.tfidf[incomplete.cases,] = rep(0.0, ncol(train.tokens.tfidf))
+dim(train.tokens.tfidf)
+sum(which(!complete.cases(train.tokens.tfidf)))
+
+train.tokens.tfidf.df = cbind(Sentiment = train.tokens.bow.df$Sentiment,
+                              as.data.frame(train.tokens.tfidf))
+```
+
+Save
+```{r}
+write.csv(train.tokens.tfidf.df,
+          file="~/Scrivania/train_tokens_tfidf.csv",
+          row.names = rownames(train.tokens.tfidf.df),
+          col.names = names(train.tokens.tfidf.df))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
