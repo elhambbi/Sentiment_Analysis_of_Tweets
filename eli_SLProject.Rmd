@@ -1,0 +1,189 @@
+---
+title: "SL project"
+output: html_document
+---
+
+```{r}
+library(e1071)
+library(caret)  #createdatapartition
+library(quanteda) #preprocessing
+library(irlba)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+```
+
+```{r}
+#cv error
+cv.error = function(formula, learner, data, k, ...) {
+  indexes = sample(nrow(data))
+  errs = c(1:k) %>% map_dbl(function(i) {
+    indexes.test = indexes[c((nrow(data)/k*(i-1)+1):(nrow(data)/k*i))]
+    m = learner(formula, data[-indexes.test,], ...)
+    predicted.y = predict(m, data[indexes.test,], type = "class")
+    actual.y = data[indexes.test, as.character(f_lhs(formula))]
+    confusion.matrix = table(actual.y, predicted.y)
+    1-sum(diag(confusion.matrix))/sum(confusion.matrix)
+  })
+  names(errs) = paste0("fold", c(1:k))
+  errs
+}
+```
+
+```{r, data}
+data <- read.csv("Tweets.csv")
+#summary(data)
+#print(data)
+
+mydata <- data[, c("airline","text", "airline_sentiment","negativereason")]
+names(mydata) <- c("airline","text", "labels","negativereason")
+mydata$labels <- as.factor(mydata$labels)
+View(mydata)
+summary(mydata)
+```
+
+```{r }
+#checking the missing tweets and labels
+length(which(!complete.cases(mydata$text)))
+length(which(!complete.cases(mydata$labels)))
+```
+
+```{r }
+#marginal distribution of labels
+prop.table(table(mydata$labels))
+
+```
+
+
+```{r}
+#looking at the length of the tweets
+mydata$TextLength <- nchar(mydata$text)
+summary(mydata$TextLength)
+
+```
+```{r}
+ggplot(mydata, aes(x = TextLength, fill = labels)) +
+  theme_bw() +
+  geom_histogram(binwidth = 5) +
+  labs(y = "Tweet Count", x = "Length of Tweet",
+       title = "Distribution of Tweet Lengths with Class Labels")
+
+
+
+airline.names = unique(mydata$airline)
+attach(mydata)
+
+par(mfrow=c(2,3), cex=.7, cex.main=.9)
+for( i in airline.names){
+    barplot(
+        prop.table(table(labels[airline==i])),
+        col=2:4,
+        main=paste("Sentiment Distribution \n for",i),
+        axes=TRUE,
+        las=2
+    )
+}
+
+detach(mydata)
+
+```
+```{r}
+#train-test split
+set.seed(32984)
+indexes <- createDataPartition(mydata$labels, times = 1,p = 0.7, list = FALSE)  #stratified splitting
+
+train <- mydata[indexes,]
+test <- mydata[-indexes,]
+
+
+# Verify proportions
+prop.table(table(train$labels))
+prop.table(table(test$labels))
+
+```
+```{r}
+#preprocessing
+
+#remove tagging the airlines at the beginning of each tweet
+train$text <- gsub("@([a-zA-Z0-9]|[_])*", "", train$text)
+#View(train)
+
+#Tokenization
+train.tokens <- tokens(train$text, what = "word",
+                       remove_numbers = T, remove_punct = T, remove_symbols = T,
+                       remove_separators = T ,split_hyphens = T, remove_url = TRUE)
+
+#lower case
+train.tokens <- tokens_tolower(train.tokens)
+
+#stop words
+train.tokens <- tokens_select(train.tokens, stopwords("en"), selection = "remove")
+
+#stemming
+train.tokens <- tokens_wordstem(train.tokens, language = "english")
+
+# check if there is any duplicated token
+length(unlist(train.tokens))
+unique.train.tokens <- sort(unique(unlist(train.tokens)))
+length(unique.train.tokens)
+
+# bag-of-words (document feature matrix - contingency table)
+train.tokens.dfm <- dfm(train.tokens, tolower = FALSE)
+train.tokens.mat <- as.matrix(train.tokens.dfm)
+dim(train.tokens.mat)
+
+which(duplicated(colnames(train.tokens.mat)))  #duplicate column names (repeated tokens)
+
+#View(train.tokens.mat[1:10, 1:10])
+#colnames(train.tokens.mat)[1:50]
+```
+```{r}
+# Setup the feature data frame with labels
+train.tokens.df <- cbind(labels=train$labels, convert(train.tokens.dfm, to= "data.frame"))
+train.tokens.df
+```
+```{r}
+# Cleanup column names
+names(train.tokens.df) <- make.names(names(train.tokens.df))
+train.tokens.df
+```
+```{r}
+#tf-idf
+
+tf <- function(row) {row/sum(row)}
+
+idf <- function(col) {
+  corpus.size <- length(col)
+  doc.count <- length(which(col>0))
+  log10(corpus.size / doc.count)
+}
+
+tf.idf <- function(tf,idf) {tf*idf}
+
+```
+
+```{r}
+# tf-idf on training corpus
+
+train.tokens.tf <- apply(train.tokens.mat, 1, tf)
+View(train.tokens.tf)
+dim(train.tokens.tf)
+
+train.tokens.idf <- apply(train.tokens.mat, 2, idf)
+View(train.tokens.idf)
+dim(train.tokens.idf)
+
+
+train.tokens.tfidf <- apply(train.tokens.tf, 2, tf.idf, idf=train.tokens.idf)
+View(train.tokens.tfidf)
+dim(train.tokens.tfidf)
+
+train.tokens.tfidf <- t(train.tokens.tfidf)  # transpose to doc*term matrix
+```
+
+
+
+
+
+
+
