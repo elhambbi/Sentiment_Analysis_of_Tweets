@@ -1,2 +1,3 @@
-# Statistical-Learning-Project
-sentiment analysis of tweets
+Sentiment analysis of tweets for airlines
+
+The project of Statistical Learning course
