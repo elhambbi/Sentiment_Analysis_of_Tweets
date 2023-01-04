@@ -4,14 +4,14 @@ author: "Gabriele"
 date: "27/5/2021"
 output: html_document
 ---
-## this file is intended only as a guideline for the implementation details behind the project. Final and complete reasoning and details are in the pdf itself
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 #Sentiment Analysis
 ##Twitter US Airline
-Given the Twitter 'US Airline Sentiment' Dataset provided on Kaggle we will try to build a machine learning tool to predict whether a given twitter is associated to a specific sentiment among:
+Given the Twitter 'US Airline Sentiment' Dataset provided on Kaggle we will try to build a machine learning tool to predict whether a given tweetter is associated to a specific sentiment among:
 
 -  Positive
 
@@ -19,7 +19,7 @@ Given the Twitter 'US Airline Sentiment' Dataset provided on Kaggle we will try 
 
 -  Negative
 
-The project will be divided in several step. Starting from the raw data we will preprocess them with the de-facto standard techniques and them build a term-document frequency matrix to be used ad learning data.
+The project wil be divided in several step. Starting from the raw data we will preprocess them with the de-facto standard techniques and them build a term-document frequency matrix to be used ad learning data.
 
 
 ```{r}
@@ -30,32 +30,20 @@ library(ggplot2)
 library(wordcloud)
 library(caret)
 library(Factoshiny)
-library(FactoMineR)
-library(factoextra)
-library(ca)
-library(irlba)
 ```
 
 
 ##Import the data
 ```{r}
-set.seed(234)
 data.raw = read.csv("Tweets.csv", header=TRUE,
-                    stringsAsFactors = FALSE)
+                    stringsAsFactors = FALSE, )
 
-# what does the dataset contain?
 data.raw %>% summary
 data.raw %>% names
-# n? p?
 data.raw %>% dim
-
-# for the purposes of the project we will consider
-# only the first 6000 tweets so that possible computation time will be
-# "bounded"
-limit.dataset.dim = sample(1:nrow(data.raw),
-                           size=6000,
-                           replace = FALSE)
-data.raw = data.raw[limit.dataset.dim,]
+data.raw %>% str
+# any missing case?
+length(which(!complete.cases(data.raw)))
 ```
 the data show many redundant information that are beyond the goal of this project, so we will discard them, here a list:
 
@@ -147,19 +135,15 @@ wordcloud(words=causes.negative.tweets.unique,
           freq=table(causes.negative.tweets),
           max.words = length(causes.negative.tweets.unique),
           colors=brewer.pal(8, "Dark2"), random.order=FALSE,
-          use.r.layout = F, scale=c(2,1))
+          use.r.layout = F, scale=c(1,1))
 # distribution
-par(mar=c(11,4,2,4))
 barplot(
         prop.table(table(as.factor(causes.negative.tweets))),
         main="Main causes for negative tweets",
         axes=TRUE,
         col=10:(length(causes.negative.tweets)),
         las=2,
-        cex.names = .8
     )
-abline(h=0)
-
 ```
 
 look the problem from a different perspective
@@ -173,6 +157,12 @@ summary(data.raw$TextLength)
 
 par(mfrow=c(2,2),cex=.8,main="Distribution
      of TextLength for Sentiments")
+# positive
+hist(data.raw$TextLength[data.raw$Sentiment=="positive"],freq=T, breaks=100,col=3,xlim=c(12,186))
+# neutral
+hist(data.raw$TextLength[data.raw$Sentiment=="neutral"],freq=T, breaks=100,col=2,xlim=c(12,186))
+# negative
+hist(data.raw$TextLength[data.raw$Sentiment=="negative"],freq=T, breaks=100,col=4,xlim=c(12,186))
 
 # by ggplot histogram
 ggplot(data.raw, aes(x = TextLength, fill = Sentiment)) +
@@ -200,23 +190,13 @@ We will later consider both BOW and TFIDF metrics to represent the data
 ```{r}
 # create 70/30 % split maintaining
 # the proportion of the classes
-
-
 indexes.split = createDataPartition(data.raw$Sentiment, times=1,
                               p=0.7, list=F)
 
 # train set
 train.raw = data.raw[indexes.split,]
-#write.csv(train.raw,
-          #file="~/Scrivania/train_raw.csv",
-          #row.names = rownames(train.raw),
-          #col.names = names(train.raw))
 # test set
 test.raw = data.raw[-indexes.split,]
-#write.csv(test.raw,
-          #file="~/Scrivania/test_raw.csv",
-          #row.names = rownames(test.raw),
-          #col.names = names(test.raw))
 
 # check that proportions are correct
 prop.table(table(train.raw$Sentiment))
@@ -244,199 +224,34 @@ train.tokens =tokens_wordstem(train.tokens, language = "english")
 train.tokens.dfm = dfm(train.tokens)
 # cast it to matrix
 train.tokens.matrix = as.matrix(train.tokens.dfm)
-dim(train.tokens.matrix)
 # train.tokens.matrix = train.tokens %>% dfm() %>% as.matrix()
 
+dim(train.tokens.matrix)
 
 # let's see the effects of stemming
-#colnames(train.tokens.matrix)[1:50]
-
-# create a first dataframe with BOW representation of texts
-train.tokens.bow.df = cbind(Sentiment = train.raw$Sentiment,
-                            as.data.frame(train.tokens.matrix))
-
-# maybe some texts are now empty, check
-empty.docs = which(rowSums(train.tokens.matrix) == 0.0)
-if(length(empty.docs != 0)){
-  train.tokens.bow.df = train.tokens.bow.df[-empty.docs,]
-}
-
-# check that nrow has changed
-dim(train.tokens.bow.df)
-# update matrix
-train.tokens.matrix = as.matrix(train.tokens.bow.df[,-1])
-
+colnames(train.tokens.matrix)[1:50]
 ```
 
-#Exploratory Analysis
+##Correspondance Analysis
 ```{r}
-text.marginal = colSums(train.tokens.matrix)
-text.marginal %>% length()
-text.marginal = text.marginal[text.marginal > 150]
-text.marginal %>% length()
-
-par(cex=.7)
-barplot(text.marginal,
-        las=2,
-        col = rainbow(length(text.marginal)),
-        ylab = "Word Count",
-        main = "Most common words")
-
-
-# extract the 30 most common words in positive tweets
-positive.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'positive', -1 ]
-positive.cols = which(colSums(positive.words) > 0)
-positive.words = positive.words[,positive.cols]
-positive.freq = colSums(positive.words)/ sum( colSums(positive.words))
-positive.words = names(positive.words)
-
-par(cex=.9)
-wordcloud(words=positive.words,
-          freq=positive.freq,
-          max.words = 100,
-          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
-          use.r.layout = F,
-          scale = c(5,0.3),
-          rot.per = 0.1
-          )
-
-
-# extract the 30 most common words in neutral tweets
-neutral.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'neutral', -1 ]
-neutral.cols = which(colSums(neutral.words) > 0)
-nautral.words = neutral.words[,neutral.cols]
-neutral.freq = colSums(neutral.words)/ sum( colSums(neutral.words))
-neutral.words = names(neutral.words)
-
-wordcloud(words=neutral.words,
-          freq=neutral.freq,
-          max.words = 100,
-          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
-          use.r.layout = F,
-          scale = c(5,0.3),
-          rot.per = 0.1
-          )
-
-# extract the 30 most common words in negative tweets
-negative.words = train.tokens.bow.df[train.tokens.bow.df$Sentiment == 'negative', -1 ]
-negative.cols = which(colSums(negative.words) > 0)
-negative.words = negative.words[,negative.cols]
-negative.freq = colSums(negative.words)/ sum( colSums(negative.words))
-negative.words = names(negative.words)
-
-wordcloud(words=negative.words,
-          freq=negative.freq,
-          max.words = 100,
-          colors=brewer.pal(n=8, name="Dark2"), random.order=FALSE,
-          use.r.layout = F,
-          scale = c(5,0.3),
-          rot.per = 0.1
-          )
+library("FactoMineR")
+library("factoextra")
 ```
 
-#Clustering
-We will try to assess whether the data show any clustering tendency focusing on the BOW representation
 ```{r}
-sl = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="single")
-cl = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="complete")
-centroid = train.tokens.bow.df[,-1] %>% dist %>% hclust(method="centroid")
+CA = CA(as.data.frame(t(train.tokens.matrix)))
 ```
-find the suggested number of clusters
+
 ```{r}
-m = length(sl$height)
-sl$height[(m-10):m] %>% plot(main="single linkage",
-                             ylab="heigth",
-                             xlab="",
-                             type="b",
-                             xaxt='n')
-cl$height[(m-10):m] %>% plot(main="complete linkage",
-                             ylab="heigth",
-                             xlab="",
-                             type="b",
-                             xaxt='n')
-centroid$height[(m-10):m] %>% plot(main="centroid linkage",
-                             ylab="heigth",
-                             xlab="",
-                             type="b",
-                             xaxt='n')
+# how many components do we need to get 80% of total inertia?
+min(which(CA$eig[,3] >= 80.0))
+# 2963
+
+CA$svd$U %>% dim
+CA$svd$V %>% dim
+
+
 ```
-
-
-
-#TF-IDF
-```{r}
-# any duplicates?
-which(duplicated(colnames(train.tokens.matrix))) 
-# no duplicates
-
-#tf-idf
-tf <- function(row) {row/sum(row)}
-
-idf = function(col){
-    corpus.size = length(col)
-    doc.count = length(which(col > 0))
-    
-    log10(corpus.size / doc.count)
-}
-
-tf.idf <- function(tf,idf) {tf*idf}
-
-train.tokens.tf <- apply(train.tokens.matrix, 1, tf)
-#View(train.tokens.tf[1:20,1:20])
-dim(train.tokens.tf)
-
-train.tokens.idf <- apply(train.tokens.matrix, 2, idf)
-#View(train.tokens.idf[1:20,1:20])
-dim(train.tokens.idf)
-
-
-train.tokens.tfidf <- apply(train.tokens.tf, 2, tf.idf, idf=train.tokens.idf)
-#View(train.tokens.tfidf[1:20,1:20])
-dim(train.tokens.tfidf)
-
-train.tokens.tfidf <- t(train.tokens.tfidf)  # transpose to doc*term matrix
-
-
-# any incomplete case?
-incomplete.cases = which(!complete.cases(train.tokens.tfidf))
-
-# fix the issue
-train.tokens.tfidf[incomplete.cases,] = rep(0.0, ncol(train.tokens.tfidf))
-dim(train.tokens.tfidf)
-sum(which(!complete.cases(train.tokens.tfidf)))
-
-train.tokens.tfidf.df = cbind(Sentiment = train.tokens.bow.df$Sentiment,
-                              as.data.frame(train.tokens.tfidf))
-```
-
-Save
-```{r}
-write.csv(train.tokens.tfidf.df,
-          file="~/Scrivania/train_tokens_tfidf.csv",
-          row.names = rownames(train.tokens.tfidf.df),
-          col.names = names(train.tokens.tfidf.df))
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
